@@ -1,0 +1,7 @@
+PySide6>=6.5.0
+winrt-runtime>=2.0.0
+winrt-Windows.Foundation
+winrt-Windows.Media.Control
+winrt-Windows.Storage.Streams
+pillow>=9.0.0
+
