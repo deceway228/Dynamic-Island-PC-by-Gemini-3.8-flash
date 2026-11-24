@@ -43,12 +43,20 @@ class DynamicIslandWidget(QWidget):
 
         # Volume control
         self.volume_manager = VolumeManager.get_instance()
-        self._volume_hud_visible = False
-        self._volume_hud_val = self.volume_manager.get_volume()
+        self._hud_opacity = 0.0
+        self._hud_target_opacity = 0.0
+        self._hud_display_volume = self.volume_manager.get_volume()
+        self._hud_target_volume = self._hud_display_volume
         self._volume_hud_muted = self.volume_manager.get_mute()
+        self._hud_source_label = self.volume_manager.get_source_label()
+
         self._volume_hud_timer = QTimer(self)
         self._volume_hud_timer.setSingleShot(True)
         self._volume_hud_timer.timeout.connect(self._hide_volume_hud)
+
+        self._hud_anim_timer = QTimer(self)
+        self._hud_anim_timer.setInterval(16)
+        self._hud_anim_timer.timeout.connect(self._on_hud_anim_tick)
 
         # Current media payload
         self.media_data = {
@@ -229,6 +237,8 @@ class DynamicIslandWidget(QWidget):
 
         self._update_ui_text()
         self.apply_theme()
+        self.volume_manager.set_target_media(data)
+        self.volume_slider._sync_system_volume()
         self.on_playback_state_changed(self.is_playing)
         self.update()
 
@@ -503,7 +513,7 @@ class DynamicIslandWidget(QWidget):
             self.is_dragging_window = False
 
     def wheelEvent(self, event):
-        # Mouse wheel on widget adjusts master volume smoothly with HUD feedback
+        # Mouse wheel on widget adjusts per-app/master volume smoothly with HUD feedback
         behavior = self.config_mgr.get("behavior", {})
         if behavior.get("scroll_volume_control", True):
             delta = event.angleDelta().y()
@@ -512,25 +522,55 @@ class DynamicIslandWidget(QWidget):
                 new_vol = self.volume_manager.step_volume(step)
                 is_muted = self.volume_manager.get_mute()
 
-                # Sync expanded slider
-                self.volume_slider._volume = new_vol
+                # Sync expanded slider smoothly
+                self.volume_slider._target_volume = new_vol
                 self.volume_slider._is_muted = is_muted
+                self.volume_slider._source_label = self.volume_manager.get_source_label()
+                self.volume_slider._is_app = self.volume_manager.is_app_volume()
                 self.volume_slider.update()
 
                 # Show HUD
                 self._trigger_volume_hud(new_vol, is_muted)
 
     def _trigger_volume_hud(self, vol: float, is_muted: bool):
-        self._volume_hud_val = vol
+        self._hud_target_volume = vol
         self._volume_hud_muted = is_muted
-        self._volume_hud_visible = True
+        self._hud_source_label = self.volume_manager.get_source_label()
+        self._hud_target_opacity = 1.0
         self._volume_hud_timer.stop()
         self._volume_hud_timer.start(1600)
+        if not self._hud_anim_timer.isActive():
+            self._hud_anim_timer.start()
         self.update()
 
     def _hide_volume_hud(self):
-        self._volume_hud_visible = False
-        self.update()
+        self._hud_target_opacity = 0.0
+        if not self._hud_anim_timer.isActive():
+            self._hud_anim_timer.start()
+
+    def _on_hud_anim_tick(self):
+        op_diff = self._hud_target_opacity - self._hud_opacity
+        vol_diff = self._hud_target_volume - self._hud_display_volume
+
+        needs_update = False
+        if abs(op_diff) > 0.01:
+            self._hud_opacity += op_diff * 0.22
+            needs_update = True
+        else:
+            self._hud_opacity = self._hud_target_opacity
+
+        if abs(vol_diff) > 0.002:
+            self._hud_display_volume += vol_diff * 0.26
+            needs_update = True
+        else:
+            self._hud_display_volume = self._hud_target_volume
+
+        if self._hud_opacity <= 0.01 and self._hud_target_opacity == 0.0:
+            self._hud_opacity = 0.0
+            self._hud_anim_timer.stop()
+
+        if needs_update:
+            self.update()
 
     def _on_slider_volume_changed(self, vol: float):
         self._trigger_volume_hud(vol, self.volume_manager.get_mute())
@@ -720,14 +760,15 @@ class DynamicIslandWidget(QWidget):
             art_y = int(38 * scale_e)
             self._draw_album_art(painter, QRectF(art_x, art_y, art_size, art_size), radius=int(12 * scale_e))
 
-        # 5. Compact Volume HUD Overlay
-        if self._volume_hud_visible and r_expand < 0.6:
+        # 5. Compact Volume HUD Overlay with smooth opacity
+        if self._hud_opacity > 0.01 and r_expand < 0.6:
             self._draw_compact_volume_hud(painter, w, h, accent)
 
     def _draw_compact_volume_hud(self, painter: QPainter, w: int, h: int, accent: QColor):
         painter.save()
+        painter.setOpacity(self._hud_opacity)
         scale_c = max(0.6, h / 48.0)
-        hud_w = int(152 * scale_c)
+        hud_w = int(164 * scale_c)
         hud_h = int(28 * scale_c)
         hud_x = (w - hud_w) // 2
         hud_y = (h - hud_h) // 2
@@ -736,7 +777,7 @@ class DynamicIslandWidget(QWidget):
         # Background container with subtle border
         path = QPainterPath()
         path.addRoundedRect(QRectF(hud_x, hud_y, hud_w, hud_h), hud_r, hud_r)
-        painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+        painter.setPen(QPen(QColor(255, 255, 255, 75), 1.0))
         painter.setBrush(QBrush(QColor(18, 20, 26, 240)))
         painter.drawPath(path)
 
@@ -759,8 +800,8 @@ class DynamicIslandWidget(QWidget):
         painter.drawPath(spk_path)
 
         # Mini Volume Progress Bar
-        bar_x = spk_x + spk_size + int(2 * scale_c)
-        text_w = int(36 * scale_c)
+        bar_x = spk_x + spk_size + int(4 * scale_c)
+        text_w = int(50 * scale_c)
         bar_w = hud_x + hud_w - text_w - bar_x - int(6 * scale_c)
         bar_h = max(3.0, 3.8 * scale_c)
         bar_y = hud_y + (hud_h - bar_h) / 2.0
@@ -768,19 +809,21 @@ class DynamicIslandWidget(QWidget):
         painter.setBrush(QBrush(QColor(255, 255, 255, 40)))
         painter.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), bar_h / 2.0, bar_h / 2.0)
 
-        eff_vol = 0.0 if self._volume_hud_muted else self._volume_hud_val
+        eff_vol = 0.0 if self._volume_hud_muted else self._hud_display_volume
         fill_w = max(bar_h, bar_w * eff_vol)
         if fill_w > 0:
             painter.setBrush(QBrush(QColor(160, 160, 165) if self._volume_hud_muted else accent))
             painter.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), bar_h / 2.0, bar_h / 2.0)
 
-        # Volume Text
-        painter.setFont(QFont("Segoe UI Variable Text", max(7, int(8.5 * scale_c)), QFont.Weight.DemiBold))
+        # Source + Volume Text (e.g. "EDGE 100%", "SPOTIFY 80%")
+        painter.setFont(QFont("Segoe UI Variable Text", max(7, int(8.0 * scale_c)), QFont.Weight.DemiBold))
         painter.setPen(QColor(255, 255, 255, 220))
-        pct_str = "MUTED" if self._volume_hud_muted else f"{int(self._volume_hud_val * 100)}%"
+        pct_str = "MUTED" if self._volume_hud_muted else f"{int(self._hud_display_volume * 100)}%"
+        source = (self._hud_source_label or "PC").upper()
+        label_str = f"{source} {pct_str}"
         fm = painter.fontMetrics()
         ty = int(hud_y + (hud_h + fm.ascent() - fm.descent()) / 2.0)
-        painter.drawText(int(hud_x + hud_w - text_w - int(2 * scale_c)), ty, pct_str)
+        painter.drawText(int(hud_x + hud_w - text_w - int(2 * scale_c)), ty, label_str)
         painter.restore()
 
     def _draw_album_art(self, painter: QPainter, rect: QRectF, radius: float):
