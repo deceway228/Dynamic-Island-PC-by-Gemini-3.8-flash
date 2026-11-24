@@ -15,9 +15,11 @@ from PySide6.QtWidgets import (
 
 from core.config_manager import ConfigManager
 from core.media_manager import MediaWorker
+from core.volume_manager import VolumeManager
 from ui.visualizer import MotionVisualizer
 from ui.marquee_label import MarqueeLabel
 from ui.progress_bar import MinimalProgressBar
+from ui.volume_slider import MinimalVolumeSlider
 from ui.controls import MotionIconButton
 
 class DynamicIslandWidget(QWidget):
@@ -38,6 +40,15 @@ class DynamicIslandWidget(QWidget):
         self._drag_start_pos = QPoint()
         self.has_active_session = False
         self.is_playing = False
+
+        # Volume control
+        self.volume_manager = VolumeManager.get_instance()
+        self._volume_hud_visible = False
+        self._volume_hud_val = self.volume_manager.get_volume()
+        self._volume_hud_muted = self.volume_manager.get_mute()
+        self._volume_hud_timer = QTimer(self)
+        self._volume_hud_timer.setSingleShot(True)
+        self._volume_hud_timer.timeout.connect(self._hide_volume_hud)
 
         # Current media payload
         self.media_data = {
@@ -130,6 +141,10 @@ class DynamicIslandWidget(QWidget):
         self.progress_bar = MinimalProgressBar(parent=self)
         self.progress_bar.seek_requested.connect(self.media_worker.seek_to)
 
+        # Volume slider for expanded mode
+        self.volume_slider = MinimalVolumeSlider(parent=self)
+        self.volume_slider.volume_changed.connect(self._on_slider_volume_changed)
+
         self.btn_prev = MotionIconButton(icon_type="prev", size=30, parent=self)
         self.btn_prev.clicked.connect(self.media_worker.previous_track)
 
@@ -178,6 +193,7 @@ class DynamicIslandWidget(QWidget):
             vis.sensitivity = vis_sens
 
         self.progress_bar.set_accent_color(accent)
+        self.volume_slider.set_accent_color(accent)
         self.btn_play.set_accent_color(accent)
         self.compact_play_btn.set_accent_color(accent)
 
@@ -240,11 +256,11 @@ class DynamicIslandWidget(QWidget):
         self.update_dimensions(animate=True)
 
     def get_target_dimensions(self) -> tuple[int, int]:
-        scale = self.config_mgr.get("appearance", "scale", 1.0)
+        scale = max(0.6, min(2.5, float(self.config_mgr.get("appearance", "scale", 1.0))))
         if self.is_expanded:
-            return int(390 * scale), int(172 * scale)
+            return int(400 * scale), int(216 * scale)
         else:
-            return int(270 * scale), int(46 * scale)
+            return int(280 * scale), int(48 * scale)
 
     def update_dimensions(self, animate: bool = True):
         w, h = self.get_target_dimensions()
@@ -318,56 +334,111 @@ class DynamicIslandWidget(QWidget):
         self.exp_album_label.setVisible(show_expanded)
         self.exp_visualizer.setVisible(show_expanded)
         self.progress_bar.setVisible(show_expanded)
+        self.volume_slider.setVisible(show_expanded)
         self.btn_prev.setVisible(show_expanded)
         self.btn_play.setVisible(show_expanded)
         self.btn_next.setVisible(show_expanded)
         self.btn_settings.setVisible(show_expanded)
 
         if show_compact:
-            # Compact Pill Layout
-            # Left: small album art (28x28 at x=10, y=8)
-            text_x = 44
-            vis_w = 32
-            btn_w = 26
-            text_w = max(40, w - text_x - vis_w - btn_w - 18)
+            # Compact Pill Layout: fully dynamic scaling based on h
+            scale_c = max(0.6, h / 48.0)
+            art_size = int(h * 0.62)
+            art_x = int(h * 0.20)
 
-            self.compact_title_label.setGeometry(text_x, 7, text_w, 16)
-            self.compact_artist_label.setGeometry(text_x, 23, text_w, 15)
+            pad_r = int(h * 0.20)
+            btn_size = int(h * 0.58)
+            play_x = w - pad_r - btn_size
+            play_y = (h - btn_size) // 2
+            self.compact_play_btn.set_size(btn_size)
+            self.compact_play_btn.setGeometry(play_x, play_y, btn_size, btn_size)
 
-            self.compact_visualizer.setGeometry(text_x + text_w + 6, (h - 18) // 2, vis_w, 18)
-            self.compact_play_btn.setGeometry(w - btn_w - 10, (h - btn_w) // 2, btn_w, btn_w)
+            vis_w = int(32 * scale_c)
+            vis_h = int(18 * scale_c)
+            vis_x = play_x - vis_w - int(6 * scale_c)
+            vis_y = (h - vis_h) // 2
+            self.compact_visualizer.setGeometry(vis_x, vis_y, vis_w, vis_h)
+
+            text_x = art_x + art_size + int(10 * scale_c)
+            text_w = max(40, vis_x - text_x - int(8 * scale_c))
+
+            title_pt = max(7, int(10.5 * scale_c))
+            artist_pt = max(6, int(8.8 * scale_c))
+            line_h1 = int(h * 0.38)
+            line_h2 = int(h * 0.34)
+            title_y = int(h * 0.14)
+            artist_y = title_y + line_h1
+
+            self.compact_title_label.set_font_size(title_pt)
+            self.compact_artist_label.set_font_size(artist_pt)
+            self.compact_title_label.setGeometry(text_x, title_y, text_w, line_h1)
+            self.compact_artist_label.setGeometry(text_x, artist_y, text_w, line_h2)
 
         if show_expanded:
-            # Expanded Card Layout
-            pad = 14
-            # Top header: Platform name + badge + Settings button
-            self.btn_settings.setGeometry(w - pad - 24, pad, 24, 24)
+            # Expanded Card Layout: fully dynamic scaling based on w
+            scale_e = max(0.6, w / 400.0)
+            pad = int(18 * scale_e)
 
-            # Center section:
-            # Left: Large album art (64x64 at x=16, y=36)
-            art_size = 64
-            art_x = pad + 2
-            art_y = 34
+            # Top header: Settings button
+            s_size = int(24 * scale_e)
+            self.btn_settings.set_size(s_size)
+            self.btn_settings.setGeometry(w - pad - s_size, int(14 * scale_e), s_size, s_size)
 
-            text_x = art_x + art_size + 14
-            text_w = max(60, w - text_x - pad - 42)
+            # Center section: Large album art
+            art_size = int(68 * scale_e)
+            art_x = pad
+            art_y = int(38 * scale_e)
 
-            self.exp_title_label.setGeometry(text_x, art_y, text_w, 20)
-            self.exp_artist_label.setGeometry(text_x, art_y + 20, text_w, 18)
-            self.exp_album_label.setGeometry(text_x, art_y + 38, text_w, 16)
+            # Visualizer
+            vis_w = int(40 * scale_e)
+            vis_h = int(24 * scale_e)
+            vis_x = w - pad - vis_w
+            vis_y = art_y + int(4 * scale_e)
+            self.exp_visualizer.setGeometry(vis_x, vis_y, vis_w, vis_h)
 
-            self.exp_visualizer.setGeometry(w - pad - 44, art_y + 4, 38, 24)
+            # Text block
+            text_x = art_x + art_size + int(14 * scale_e)
+            text_w = max(50, vis_x - text_x - int(10 * scale_e))
+            title_pt = max(9, int(13.0 * scale_e))
+            artist_pt = max(8, int(10.5 * scale_e))
+            album_pt = max(7, int(9.0 * scale_e))
+
+            line_h1 = int(22 * scale_e)
+            line_h2 = int(19 * scale_e)
+            line_h3 = int(17 * scale_e)
+            t_y = art_y
+            a_y = t_y + line_h1
+            alb_y = a_y + line_h2
+
+            self.exp_title_label.set_font_size(title_pt)
+            self.exp_artist_label.set_font_size(artist_pt)
+            self.exp_album_label.set_font_size(album_pt)
+            self.exp_title_label.setGeometry(text_x, t_y, text_w, line_h1)
+            self.exp_artist_label.setGeometry(text_x, a_y, text_w, line_h2)
+            self.exp_album_label.setGeometry(text_x, alb_y, text_w, line_h3)
 
             # Interactive Progress Bar
-            prog_y = art_y + art_size + 6
-            self.progress_bar.setGeometry(pad, prog_y, w - 2 * pad, 24)
+            prog_y = art_y + art_size + int(10 * scale_e)
+            prog_h = int(22 * scale_e)
+            self.progress_bar.setGeometry(pad, prog_y, w - 2 * pad, prog_h)
+
+            # Interactive Volume Slider
+            vol_y = prog_y + prog_h + int(6 * scale_e)
+            vol_h = int(20 * scale_e)
+            self.volume_slider.setGeometry(pad, vol_y, w - 2 * pad, vol_h)
 
             # Controls at bottom
-            ctrl_y = prog_y + 26
-            center_x = w // 2
-            self.btn_play.setGeometry(center_x - 18, ctrl_y - 4, 36, 36)
-            self.btn_prev.setGeometry(center_x - 18 - 42, ctrl_y - 1, 30, 30)
-            self.btn_next.setGeometry(center_x + 18 + 12, ctrl_y - 1, 30, 30)
+            ctrl_y = vol_y + vol_h + int(6 * scale_e)
+            play_sz = int(38 * scale_e)
+            nav_sz = int(30 * scale_e)
+            self.btn_play.set_size(play_sz)
+            self.btn_prev.set_size(nav_sz)
+            self.btn_next.set_size(nav_sz)
+
+            cx = w // 2
+            self.btn_play.setGeometry(cx - play_sz // 2, ctrl_y, play_sz, play_sz)
+            self.btn_prev.setGeometry(cx - play_sz // 2 - int(44 * scale_e), ctrl_y + (play_sz - nav_sz) // 2, nav_sz, nav_sz)
+            self.btn_next.setGeometry(cx + play_sz // 2 + int(14 * scale_e), ctrl_y + (play_sz - nav_sz) // 2, nav_sz, nav_sz)
 
     # Mouse & Gesture Interactions
     def enterEvent(self, event):
@@ -432,14 +503,37 @@ class DynamicIslandWidget(QWidget):
             self.is_dragging_window = False
 
     def wheelEvent(self, event):
-        # Mouse wheel on widget adjusts master volume or skips
+        # Mouse wheel on widget adjusts master volume smoothly with HUD feedback
         behavior = self.config_mgr.get("behavior", {})
         if behavior.get("scroll_volume_control", True):
             delta = event.angleDelta().y()
-            if delta > 0:
-                self.media_worker.seek_to(self.progress_bar._position + 5.0)
-            elif delta < 0:
-                self.media_worker.seek_to(max(0.0, self.progress_bar._position - 5.0))
+            if delta != 0:
+                step = 0.02 if delta > 0 else -0.02
+                new_vol = self.volume_manager.step_volume(step)
+                is_muted = self.volume_manager.get_mute()
+
+                # Sync expanded slider
+                self.volume_slider._volume = new_vol
+                self.volume_slider._is_muted = is_muted
+                self.volume_slider.update()
+
+                # Show HUD
+                self._trigger_volume_hud(new_vol, is_muted)
+
+    def _trigger_volume_hud(self, vol: float, is_muted: bool):
+        self._volume_hud_val = vol
+        self._volume_hud_muted = is_muted
+        self._volume_hud_visible = True
+        self._volume_hud_timer.stop()
+        self._volume_hud_timer.start(1600)
+        self.update()
+
+    def _hide_volume_hud(self):
+        self._volume_hud_visible = False
+        self.update()
+
+    def _on_slider_volume_changed(self, vol: float):
+        self._trigger_volume_hud(vol, self.volume_manager.get_mute())
 
     def _show_context_menu(self, global_pos: QPoint):
         menu = QMenu(self)
@@ -532,9 +626,10 @@ class DynamicIslandWidget(QWidget):
         r_expand = self._content_expand_ratio
 
         app_cfg = self.config_mgr.get("appearance", {})
-        corner_radius = app_cfg.get("corner_radius", 24)
+        scale_factor = (h / 48.0) if r_expand < 0.6 else (w / 400.0)
+        corner_radius = int(app_cfg.get("corner_radius", 24) * scale_factor)
         if self.is_expanded:
-            corner_radius = min(corner_radius, 26)
+            corner_radius = min(corner_radius, int(26 * scale_factor))
 
         # Glow and border colors
         accent_mode = app_cfg.get("accent_mode", "auto")
@@ -591,34 +686,102 @@ class DynamicIslandWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(QRectF(0.5, 0.5, w - 1.0, h - 1.0), corner_radius, corner_radius)
 
-        # 4. Render Album Cover Art
+        # 4. Render Album Cover Art & Header
         if r_expand < 0.6:
-            # Compact thumbnail (28x28 at x=9, y=(h-28)/2)
-            c_size = 28
-            c_x = 9
+            # Compact thumbnail (scaled dynamically with h)
+            c_size = int(h * 0.62)
+            c_x = int(h * 0.20)
             c_y = (h - c_size) // 2
             self._draw_album_art(painter, QRectF(c_x, c_y, c_size, c_size), radius=c_size / 2.0)
         else:
             # Header in expanded mode: Platform badge
-            painter.setFont(QFont("Segoe UI Variable Text", 8, QFont.Weight.DemiBold))
+            scale_e = max(0.6, w / 400.0)
+            pad = int(18 * scale_e)
+            badge_font = QFont("Segoe UI Variable Text", max(7, int(8.5 * scale_e)), QFont.Weight.DemiBold)
+            painter.setFont(badge_font)
             player_name = self.media_data.get("player_name", "Media Player")
             badge_text = player_name.upper()
 
             brand_col = QColor(self.media_data.get("brand_color", "#1DB954"))
-            # Platform dot
+            dot_x = pad
+            dot_y = int(18 * scale_e)
+            dot_sz = max(5, int(7 * scale_e))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(brand_col))
-            painter.drawEllipse(QRectF(16, 17, 7, 7))
+            painter.drawEllipse(QRectF(dot_x, dot_y, dot_sz, dot_sz))
 
             # Platform label
             painter.setPen(QColor(255, 255, 255, 170))
-            painter.drawText(28, 24, badge_text)
+            painter.drawText(int(dot_x + dot_sz + 6 * scale_e), int(dot_y + dot_sz + 1), badge_text)
 
-            # Large album art (64x64 at x=16, y=34)
-            art_size = 64
-            art_x = 16
-            art_y = 34
-            self._draw_album_art(painter, QRectF(art_x, art_y, art_size, art_size), radius=10.0)
+            # Large album art (scaled with w)
+            art_size = int(68 * scale_e)
+            art_x = pad
+            art_y = int(38 * scale_e)
+            self._draw_album_art(painter, QRectF(art_x, art_y, art_size, art_size), radius=int(12 * scale_e))
+
+        # 5. Compact Volume HUD Overlay
+        if self._volume_hud_visible and r_expand < 0.6:
+            self._draw_compact_volume_hud(painter, w, h, accent)
+
+    def _draw_compact_volume_hud(self, painter: QPainter, w: int, h: int, accent: QColor):
+        painter.save()
+        scale_c = max(0.6, h / 48.0)
+        hud_w = int(152 * scale_c)
+        hud_h = int(28 * scale_c)
+        hud_x = (w - hud_w) // 2
+        hud_y = (h - hud_h) // 2
+        hud_r = hud_h / 2.0
+
+        # Background container with subtle border
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(hud_x, hud_y, hud_w, hud_h), hud_r, hud_r)
+        painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+        painter.setBrush(QBrush(QColor(18, 20, 26, 240)))
+        painter.drawPath(path)
+
+        # Speaker icon
+        spk_x = hud_x + int(10 * scale_c)
+        spk_y = hud_y + int((hud_h - 14 * scale_c) / 2.0)
+        spk_size = int(14 * scale_c)
+        col = QColor(255, 100, 100) if self._volume_hud_muted else QColor(255, 255, 255, 220)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(col))
+
+        spk_path = QPainterPath()
+        spk_path.moveTo(spk_x + 1, spk_y + 4)
+        spk_path.lineTo(spk_x + 4, spk_y + 4)
+        spk_path.lineTo(spk_x + 8, spk_y + 1)
+        spk_path.lineTo(spk_x + 8, spk_y + 13)
+        spk_path.lineTo(spk_x + 4, spk_y + 10)
+        spk_path.lineTo(spk_x + 1, spk_y + 10)
+        spk_path.closeSubpath()
+        painter.drawPath(spk_path)
+
+        # Mini Volume Progress Bar
+        bar_x = spk_x + spk_size + int(2 * scale_c)
+        text_w = int(36 * scale_c)
+        bar_w = hud_x + hud_w - text_w - bar_x - int(6 * scale_c)
+        bar_h = max(3.0, 3.8 * scale_c)
+        bar_y = hud_y + (hud_h - bar_h) / 2.0
+
+        painter.setBrush(QBrush(QColor(255, 255, 255, 40)))
+        painter.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), bar_h / 2.0, bar_h / 2.0)
+
+        eff_vol = 0.0 if self._volume_hud_muted else self._volume_hud_val
+        fill_w = max(bar_h, bar_w * eff_vol)
+        if fill_w > 0:
+            painter.setBrush(QBrush(QColor(160, 160, 165) if self._volume_hud_muted else accent))
+            painter.drawRoundedRect(QRectF(bar_x, bar_y, fill_w, bar_h), bar_h / 2.0, bar_h / 2.0)
+
+        # Volume Text
+        painter.setFont(QFont("Segoe UI Variable Text", max(7, int(8.5 * scale_c)), QFont.Weight.DemiBold))
+        painter.setPen(QColor(255, 255, 255, 220))
+        pct_str = "MUTED" if self._volume_hud_muted else f"{int(self._volume_hud_val * 100)}%"
+        fm = painter.fontMetrics()
+        ty = int(hud_y + (hud_h + fm.ascent() - fm.descent()) / 2.0)
+        painter.drawText(int(hud_x + hud_w - text_w - int(2 * scale_c)), ty, pct_str)
+        painter.restore()
 
     def _draw_album_art(self, painter: QPainter, rect: QRectF, radius: float):
         painter.save()

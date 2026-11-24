@@ -26,6 +26,13 @@ class MotionIconButton(QWidget):
         self._hover_anim.setDuration(180)
         self._hover_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
+    def set_size(self, size: int):
+        s = max(16, int(size))
+        if self._btn_size != s:
+            self._btn_size = s
+            self.setFixedSize(s, s)
+            self.update()
+
     def get_hover_progress(self) -> float:
         return self._hover_progress
 

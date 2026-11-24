@@ -281,7 +281,7 @@ class SettingsDialog(QDialog):
         geom_layout.addLayout(row_scale)
 
         self.slider_scale = QSlider(Qt.Orientation.Horizontal)
-        self.slider_scale.setRange(80, 140)
+        self.slider_scale.setRange(70, 160)
         self.slider_scale.setValue(int(self.config_mgr.get("appearance", "scale", 1.0) * 100))
         self.slider_scale.valueChanged.connect(self._on_scale_changed)
         geom_layout.addWidget(self.slider_scale)
@@ -494,7 +494,7 @@ class SettingsDialog(QDialog):
         self.chk_click.toggled.connect(lambda val: self.config_mgr.set("behavior", "click_to_expand", val))
         bhv_layout.addWidget(self.chk_click)
 
-        self.chk_scroll = QCheckBox("Перемотка трека колёсиком мыши над виджетом (±5 сек)")
+        self.chk_scroll = QCheckBox("Регулировка громкости колёсиком мыши над виджетом (±2%)")
         self.chk_scroll.setChecked(self.config_mgr.get("behavior", "scroll_volume_control", True))
         self.chk_scroll.toggled.connect(lambda val: self.config_mgr.set("behavior", "scroll_volume_control", val))
         bhv_layout.addWidget(self.chk_scroll)
