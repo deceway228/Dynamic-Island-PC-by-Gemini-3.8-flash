@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
 from core.config_manager import ConfigManager
 from core.media_manager import MediaWorker
+from core.autostart_manager import sync_autostart_with_config
 from ui.widget import DynamicIslandWidget
 from ui.settings_dialog import SettingsDialog
 
@@ -49,6 +50,7 @@ def main():
 
     # Core engines
     config_mgr = ConfigManager()
+    sync_autostart_with_config(config_mgr)
     media_worker = MediaWorker()
     media_worker.start()
 

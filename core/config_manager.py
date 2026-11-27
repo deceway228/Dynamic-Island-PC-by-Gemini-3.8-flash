@@ -50,7 +50,8 @@ DEFAULT_CONFIG = {
         "auto_hide_delay_seconds": 15,
         "show_when_idle": True,
         "idle_text": "Ready to play",
-        "close_to_tray": True
+        "close_to_tray": True,
+        "autostart": True
     }
 }
 

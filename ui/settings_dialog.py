@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QSpinBox, QLineEdit, QFrame, QMessageBox
 )
 from core.config_manager import ConfigManager
+from core.autostart_manager import is_autostart_enabled, set_autostart
 
 DARK_STYLE = """
 QDialog {
@@ -499,6 +500,12 @@ class SettingsDialog(QDialog):
         self.chk_scroll.toggled.connect(lambda val: self.config_mgr.set("behavior", "scroll_volume_control", val))
         bhv_layout.addWidget(self.chk_scroll)
 
+        self.chk_autostart = QCheckBox("Запускать вместе с Windows (Автозагрузка)")
+        is_auto = is_autostart_enabled() or self.config_mgr.get("behavior", "autostart", True)
+        self.chk_autostart.setChecked(is_auto)
+        self.chk_autostart.toggled.connect(self._on_autostart_toggled)
+        bhv_layout.addWidget(self.chk_autostart)
+
         layout.addWidget(grp_bhv)
 
         # Idle Text
@@ -515,6 +522,10 @@ class SettingsDialog(QDialog):
         layout.addWidget(grp_idle)
         layout.addStretch()
         return widget
+
+    def _on_autostart_toggled(self, val: bool):
+        self.config_mgr.set("behavior", "autostart", val)
+        set_autostart(val)
 
     # 5. About Tab
     def _create_about_tab(self) -> QWidget:
